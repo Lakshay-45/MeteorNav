@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>MeteorNav v4.0 Flat-Cruiser Engine</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      --bg: #000000;
+      --card: rgba(10, 16, 28, 0.96);
+      --primary: #00f0ff;
+      --ok: #00ff66;
+      --warn: #ff9e00;
+      --danger: #ff1e42;
+      --text: #ffffff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, Roboto, sans-serif; user-select: none; -webkit-tap-highlight-color: transparent; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }
+    #map { width: 100%; height: 100%; z-index: 1; background: #0a0f1d; }
+
+    /* Peripheral Edge Strobe */
+    #strobe-frame {
+      position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+      border: 0px solid transparent; transition: border-width 0.15s ease;
+    }
+    #strobe-frame.strobe-warn {
+      border-width: 11px; border-color: var(--warn);
+      box-shadow: inset 0 0 38px var(--warn);
+      animation: pulseEdge 0.6s infinite alternate;
+    }
+    #strobe-frame.strobe-danger {
+      border-width: 14px; border-color: var(--danger);
+      box-shadow: inset 0 0 50px var(--danger);
+      animation: pulseEdge 0.35s infinite alternate;
+    }
+    @keyframes pulseEdge { from { opacity: 1; } to { opacity: 0.2; } }
+
+    /* Google Maps Style Top Turn + Slope Guard Banner */
+    #nav-top {
+      position: absolute; top: 8px; left: 8px; right: 8px; z-index: 1000;
+      background: #0b4636; border: 2px solid #10b981; border-radius: 18px;
+      overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,0.85);
+      transition: background 0.25s, border-color 0.25s;
+    }
+    #nav-top.imminent { background: #522404; border-color: var(--warn); }
+    #nav-top.incline-lock { background: #1e1b4b; border-color: var(--primary); }
+    #nav-top.danger { background: #5a0716; border-color: var(--danger); }
+
+    .turn-main {
+      display: grid; grid-template-columns: 74px 1fr; gap: 10px;
+      padding: 10px 12px 8px; align-items: center;
+    }
+    .turn-arrow-box {
+      width: 68px; height: 68px; border-radius: 14px;
+      background: rgba(0,0,0,0.4); border: 2px solid rgba(255,255,255,0.22);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+    #turn-icon { font-size: 30px; line-height: 1; font-weight: 900; }
+    #turn-dist { font-size: 13px; font-weight: 900; color: var(--primary); margin-top: 3px; }
+
+    .turn-text-box { display: flex; flex-direction: column; gap: 3px; }
+    .badge-row { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
+    .mini-badge {
+      font-size: 10px; font-weight: 900; text-transform: uppercase;
+      background: rgba(0,0,0,0.5); color: var(--primary); padding: 3px 7px; border-radius: 6px;
+    }
+    #slope-badge { color: var(--ok); border: 1px solid rgba(0,255,102,0.4); }
+    #turn-title { font-size: 17px; font-weight: 900; color: #fff; line-height: 1.2; }
+    #turn-sub { font-size: 12.5px; color: #e2e8f0; font-weight: 600; line-height: 1.25; }
+
+    /* 4-State Incline vs Level Decision Strip */
+    .incline-solver-bar {
+      background: rgba(0,0,0,0.45); padding: 5px 10px;
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 11px; font-weight: 800; border-top: 1px solid rgba(255,255,255,0.12);
+    }
+    .solver-verdict { color: var(--ok); }
+    .solver-verdict.incline-ok { color: var(--warn); }
+
+    /* 3-Lane Position Assist */
+    .lane-strip {
+      background: rgba(0, 0, 0, 0.65); padding: 6px 10px;
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;
+      border-top: 1px solid rgba(255,255,255,0.12);
+    }
+    .lane-pill {
+      padding: 5px 4px; border-radius: 7px; text-align: center;
+      font-size: 10.5px; font-weight: 800; background: rgba(255,255,255,0.06); color: #94a3b8;
+    }
+    .lane-pill.go { background: rgba(0, 255, 102, 0.22); color: var(--ok); border: 1px solid var(--ok); }
+    .lane-pill.avoid { background: rgba(255, 30, 66, 0.22); color: #fda4af; border-color: #be123c; }
+
+    /* Floating Speed + Grade Indicator */
+    #speed-floating {
+      position: absolute; bottom: 186px; left: 10px; z-index: 1000;
+      width: 76px; height: 76px; border-radius: 50%;
+      background: var(--card); border: 3px solid var(--ok);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.85);
+    }
+    #speed-floating.overspeed { border-color: var(--danger); background: #3b040c; }
+    #speed-num { font-size: 25px; font-weight: 900; color: #fff; line-height: 1; }
+    #grade-lbl { font-size: 10px; font-weight: 900; color: var(--ok); margin-top: 2px; }
+
+    /* Floating Right Quick-Actions */
+    #right-fab-stack {
+      position: absolute; bottom: 186px; right: 10px; z-index: 1000;
+      display: flex; flex-direction: column; gap: 7px;
+    }
+    .fab-btn {
+      background: var(--card); color: #fff; border: 1px solid #334155;
+      padding: 9px 11px; border-radius: 13px; font-size: 11.5px; font-weight: 800;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.75); cursor: pointer; text-align: right;
+    }
+    .fab-btn.detour { background: #172554; border-color: var(--primary); color: var(--primary); }
+
+    /* Bottom Sheet */
+    #nav-bottom {
+      position: absolute; bottom: 8px; left: 8px; right: 8px; z-index: 1000;
+      background: var(--card); border: 1px solid #334155; border-radius: 20px;
+      padding: 10px 12px; display: flex; flex-direction: column; gap: 7px;
+      box-shadow: 0 -8px 28px rgba(0,0,0,0.85);
+    }
+    .eta-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding-bottom: 5px; border-bottom: 1px solid #1e293b;
+    }
+    .eta-main { display: flex; align-items: baseline; gap: 8px; }
+    #rem-mins { font-size: 22px; font-weight: 900; color: var(--ok); }
+    #rem-dist-eta { font-size: 13px; font-weight: 700; color: #cbd5e1; }
+    #batt-pill { font-size: 11px; font-weight: 800; color: #94a3b8; }
+
+    /* Live Flyover vs Surface Condition Selector (For Instant Override) */
+    .terrain-matrix-row {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px;
+    }
+    .t-mode {
+      background: #0f172a; color: #94a3b8; border: 1px solid #1e293b;
+      padding: 7px 4px; border-radius: 8px; font-size: 10px; font-weight: 800;
+      text-align: center; cursor: pointer;
+    }
+    .t-mode.active { background: rgba(0, 255, 102, 0.18); color: var(--ok); border-color: var(--ok); }
+    .t-mode.incline-active { background: rgba(255, 158, 0, 0.2); color: var(--warn); border-color: var(--warn); }
+
+    .corridor-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+    .c-tab {
+      background: #111827; color: #cbd5e1; border: 1px solid #374151;
+      padding: 8px 4px; border-radius: 9px; font-size: 11px; font-weight: 800;
+      text-align: center; cursor: pointer;
+    }
+    .c-tab.active { background: var(--primary); color: #000; border-color: var(--primary); }
+
+    .ctrl-strip { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 6px; }
+    .ctrl-btn {
+      background: #090d16; color: #e2e8f0; border: 1px solid #1e293b;
+      padding: 8px 4px; border-radius: 9px; font-size: 11px; font-weight: 800;
+      text-align: center; cursor: pointer;
+    }
+    .ctrl-btn.on { border-color: var(--primary); color: var(--primary); }
+    .ctrl-btn.rain { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+    .nav-puck {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--primary); border: 4px solid #000;
+      box-shadow: 0 0 0 3px #fff, 0 0 20px var(--primary);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="strobe-frame"></div>
+
+  <!-- Top Turn & Incline-Guard Banner -->
+  <div id="nav-top">
+    <div class="turn-main">
+      <div class="turn-arrow-box">
+        <div id="turn-icon">⬆️</div>
+        <div id="turn-dist">-- m</div>
+      </div>
+      <div class="turn-text-box">
+        <div class="badge-row">
+          <span class="mini-badge" id="active-corridor-pill">STRAIGHTAWAY FLAT PRIORITY</span>
+          <span class="mini-badge" id="slope-badge">⛰️ 0.1% FLAT • ZERO BRAKE HOLD</span>
+        </div>
+        <div id="turn-title">Long-Straight Level Cruise Locked</div>
+        <div id="turn-sub">Prefers dead-flat arterials; only uses inclines if flat is jammed & ramp is 100% empty.</div>
+      </div>
+    </div>
+
+    <!-- Live Incline vs Flat Decision Bar -->
+    <div class="incline-solver-bar">
+      <span id="solver-state">⚖️ TERRAIN POLICY: LEVEL GROUND LOCKED</span>
+      <span class="solver-verdict" id="solver-action">● SKIPPING INCLINES</span>
+    </div>
+
+    <div class="lane-strip">
+      <div class="lane-pill go" id="lane-l">⬅️ LEFT: FLAT SLIP</div>
+      <div class="lane-pill go" id="lane-m">⬆️ MID: STRAIGHT</div>
+      <div class="lane-pill go" id="lane-r">➡️ RIGHT: CRUISE</div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- Floating Speedometer + Real-Time Slope % -->
+  <div id="speed-floating">
+    <div id="speed-num">0</div>
+    <div id="grade-lbl">0.1% FLAT</div>
+  </div>
+
+  <!-- Right Floating Stack -->
+  <div id="right-fab-stack">
+    <button class="fab-btn detour" onclick="triggerFlatStraightDetour()">🛡️ Flat Detour</button>
+    <button class="fab-btn" id="btn-follow" onclick="toggleFollow()">🎯 Re-Center</button>
+    <button class="fab-btn" onclick="fitAllCorridors()">🗺️ Overview</button>
+  </div>
+
+  <!-- Bottom Control & Terrain Policy Sheet -->
+  <div id="nav-bottom">
+    <div class="eta-row">
+      <div class="eta-main">
+        <span id="rem-mins">47 min</span>
+        <span id="rem-dist-eta">38.0 km • 94% Straightaways</span>
+      </div>
+      <span id="batt-pill">🔋 --%</span>
+    </div>
+
+    <!-- 3-Scenario Traffic vs Incline Selector (Auto-Evaluated + 1-Tap Override) -->
+    <div class="terrain-matrix-row">
+      <button class="t-mode active" id="t-flat" onclick="setTerrainPolicy('FLAT_LOCKED')">
+        🟢 Flat Clear / 🔴 Both Bad<br>➔ STAY LEVEL
+      </button>
+      <button class="t-mode" id="t-incline-free" onclick="setTerrainPolicy('INCLINE_EMPTY')">
+        🔴 Flat Jam / 🟢 Ramp Empty<br>➔ USE FLYOVER
+      </button>
+      <button class="t-mode" id="t-auto" onclick="setTerrainPolicy('AUTO_SMART')">
+        🤖 Smart GPS Speed<br>➔ AUTO DECIDE
+      </button>
+    </div>
+
+    <!-- Approved Straightaway Corridors -->
+    <div class="corridor-tabs">
+      <button class="c-tab active" id="tab-0" onclick="selectCorridor(0)">1️⃣ ORR+RingRd (Flat)</button>
+      <button class="c-tab" id="tab-1" onclick="selectCorridor(1)">2️⃣ Pushta+Geeta (Flat)</button>
+      <button class="c-tab" id="tab-2" onclick="selectCorridor(2)">3️⃣ Elevated (If Empty)</button>
+    </div>
+
+    <div class="ctrl-strip">
+      <button class="ctrl-btn on" id="btn-dir" onclick="toggleDirection()">☀️ AM ➔ Office</button>
+      <button class="ctrl-btn" id="btn-rain" onclick="toggleRain()">🌧️ Rain: OFF</button>
+      <button class="ctrl-btn on" id="btn-audio" onclick="toggleAudio()">🔊 SafeChime</button>
+      <button class="ctrl-btn" id="btn-sim" onclick="toggleSimulation()">▶️ Sim Ride</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+
+    const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([28.665, 77.245], 12);
+    L.tileLayer('https://mt1.google.com/vt/lyrs=m,traffic&x={x}&y={y}&z={z}', {
+      maxZoom: 19, crossOrigin: true
+    }).addTo(map);
+
+    // =========================================================================
+    // 1. S21 ULTRA SPEAKER-SAFE ACOUSTIC ENGINE (Sine/Triangle + Limiter)
+    // =========================================================================
+    let audioCtx = null, compressor = null, audioEnabled = true;
+
+    function initAudio() {
+      if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+        compressor = audioCtx.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(-12, audioCtx.currentTime);
+        compressor.knee.setValueAtTime(10, audioCtx.currentTime);
+        compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
+        compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+        compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+        compressor.connect(audioCtx.destination);
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playSafeChime(type = 'warn') {
+      if (!audioEnabled) return;
+      initAudio();
+      const now = audioCtx.currentTime;
+      const notes = type === 'danger'
+        ? [ { f: 1567.98, t: 0.0, d: 0.16, w: 'triangle' }, { f: 1174.66, t: 0.19, d: 0.16, w: 'triangle' }, { f: 1567.98, t: 0.38, d: 0.22, w: 'triangle' } ]
+        : [ { f: 880.00, t: 0.0, d: 0.14, w: 'sine' }, { f: 1108.73, t: 0.16, d: 0.14, w: 'sine' }, { f: 1318.51, t: 0.32, d: 0.26, w: 'sine' } ];
+
+      notes.forEach(n => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = n.w;
+        osc.frequency.setValueAtTime(n.f, now + n.t);
+        gain.gain.setValueAtTime(0.001, now + n.t);
+        gain.gain.linearRampToValueAtTime(0.24, now + n.t + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + n.t + n.d);
+        osc.connect(gain);
+        gain.connect(compressor);
+        osc.start(now + n.t);
+        osc.stop(now + n.t + n.d + 0.02);
+      });
+    }
+
+    function fireAlert(type, speechText) {
+      if (!audioEnabled) return;
+      playSafeChime(type);
+      if ('vibrate' in navigator) {
+        navigator.vibrate(type === 'danger' ? [260, 100, 260, 100, 400] : [180, 90, 260]);
+      }
+      setTimeout(() => {
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const u = new SpeechSynthesisUtterance(speechText);
+          u.rate = 1.03; u.volume = 0.9;
+          window.speechSynthesis.speak(u);
+        }
+      }, 620);
+    }
+
+    document.addEventListener('touchstart', initAudio, { once: true });
+    document.addEventListener('click', initAudio, { once: true });
+
+    // =========================================================================
+    // 2. LONG-STRAIGHTAWAY & LEVEL-TERRAIN CORRIDORS
+    // =========================================================================
+    const ROUTE_GRAPH = {
+      AM: [
+        {
+          name: 'Corridor 1: Long-Straight ORR + Flat Salimgarh + Sec 12/22 Grid',
+          short: '1️⃣ ORR+RingRd (Flat)',
+          gradeProfile: '0.2% Avg Grade • 4 Straight Stretches (11km + 9km + 6km + 8km)',
+          pts: [
+            [28.7295, 77.1292], [28.7351, 77.1458], [28.7364, 77.1565], [28.7342, 77.1845],
+            [28.7279, 77.2038], [28.7027, 77.2279], [28.6685, 77.2328], [28.6565, 77.2458],
+            [28.6254, 77.2535], [28.5955, 77.2692], [28.6048, 77.2912], [28.5815, 77.3031],
+            [28.5866, 77.3245], [28.5993, 77.3442], [28.6062, 77.3585], [28.6163, 77.3638]
+          ]
+        },
+        {
+          name: 'Corridor 2: Flat Salimgarh + Geeta Colony Embankment + Sec 12/22',
+          short: '2️⃣ Pushta+Geeta (Flat)',
+          gradeProfile: '0.3% Avg Grade • River Embankment Straightaway',
+          pts: [
+            [28.7295, 77.1292], [28.7364, 77.1565], [28.7279, 77.2038], [28.7027, 77.2279],
+            [28.6685, 77.2328], [28.6565, 77.2458], [28.6531, 77.2597], [28.6285, 77.2778],
+            [28.6048, 77.2912], [28.5815, 77.3031], [28.5866, 77.3245], [28.5993, 77.3442],
+            [28.6062, 77.3585], [28.6163, 77.3638]
+          ]
+        },
+        {
+          name: 'Corridor 3: Incline Fallback — Noida Elevated Deck (Use Only If Empty)',
+          short: '3️⃣ Elevated (If Empty)',
+          gradeProfile: '3.8% Ramp Grade • Use ONLY When Surface Is Jammed & Deck Is Free',
+          pts: [
+            [28.7295, 77.1292], [28.7364, 77.1565], [28.7279, 77.2038], [28.7027, 77.2279],
+            [28.6685, 77.2328], [28.6565, 77.2458], [28.6254, 77.2535], [28.5955, 77.2692],
+            [28.6048, 77.2912], [28.5815, 77.3031], [28.5742, 77.3240], [28.5856, 77.3477],
+            [28.5956, 77.3622], [28.6062, 77.3585], [28.6163, 77.3638]
+          ]
+        }
+      ],
+      PM: [
+        {
+          name: 'Corridor 1: Flat Sec 12/22 Straight + Pushta Rd + Geeta Colony Cut',
+          short: '1️⃣ Pushta+Geeta (Flat)',
+          gradeProfile: '0.2% Avg Grade • Zero Brake-Hold Return',
+          pts: [
+            [28.6163, 77.3638], [28.6062, 77.3585], [28.5993, 77.3442], [28.5899, 77.3359],
+            [28.5817, 77.3030], [28.6052, 77.2910], [28.6285, 77.2778], [28.6533, 77.2595],
+            [28.6568, 77.2455], [28.6688, 77.2332], [28.7027, 77.2279], [28.7279, 77.2038],
+            [28.7362, 77.1562], [28.7302, 77.1415], [28.7295, 77.1292]
+          ]
+        },
+        {
+          name: 'Corridor 2: Flat Sec 12/22 + Nizamuddin Bridge + Ring Rd Bypass',
+          short: '2️⃣ RingRd Bypass (Flat)',
+          gradeProfile: '0.2% Avg Grade • Wide 4-Lane Riverfront Straightaway',
+          pts: [
+            [28.6163, 77.3638], [28.6062, 77.3585], [28.5993, 77.3442], [28.5899, 77.3359],
+            [28.5817, 77.3030], [28.6052, 77.2910], [28.5952, 77.2690], [28.6254, 77.2532],
+            [28.6568, 77.2455], [28.6688, 77.2332], [28.7027, 77.2279], [28.7279, 77.2038],
+            [28.7362, 77.1562], [28.7302, 77.1415], [28.7295, 77.1292]
+          ]
+        },
+        {
+          name: 'Corridor 3: Incline Fallback — Noida Elevated Deck Westbound',
+          short: '3️⃣ Elevated (If Empty)',
+          gradeProfile: '3.8% Ramp Grade • Skip If Descent Ramp Has Traffic',
+          pts: [
+            [28.6163, 77.3638], [28.5956, 77.3622], [28.5856, 77.3477], [28.5775, 77.3376],
+            [28.5817, 77.3030], [28.6052, 77.2910], [28.5952, 77.2690], [28.6254, 77.2532],
+            [28.6568, 77.2455], [28.6688, 77.2332], [28.7027, 77.2279], [28.7279, 77.2038],
+            [28.7362, 77.1562], [28.7302, 77.1415], [28.7295, 77.1292]
+          ]
+        }
+      ]
+    };
+
+    // =========================================================================
+    // 3. DUAL-CONDITION FLYOVER / INCLINE DECISION NODES
+    // Each node has BOTH a Level-Terrain Instruction AND an Empty-Incline Fallback
+    // =========================================================================
+    const NAV_NODES = [
+      {
+        id: 'mukarba_am', dir: 'AM', lat: 28.7364, lng: 77.1565, icon: '↖️', limit: 50, rampGrade: 4.5,
+        titleFlat: 'Mukarba Chowk — Prefer Flat Left Slip Road',
+        subFlat: 'Both bad or surface clear? Stay LEFT on 0% flat rotary road. Zero brake-hold.',
+        voiceFlat: 'Mukarba Chowk. Take left flat slip road unless flyover is completely empty.',
+        lanesFlat: ['✅ LEFT: 0% FLAT', '⚠️ FLYOVER RAMP', '❌ FLYOVER RAMP'], stateFlat: ['go','avoid','avoid'],
+        titleIncline: 'Mukarba Flyover — Take Ramp ONLY If 100% Empty',
+        subIncline: 'Surface jammed & ramp empty? Climb in 3rd gear at 45 km/h. If ramp has cars, abort LEFT!',
+        voiceIncline: 'Mukarba Chowk. Take flyover only if ramp is completely empty.',
+        lanesIncline: ['⚠️ JAMMED SLIP', '✅ EMPTY FLYOVER', '✅ EMPTY FLYOVER'], stateIncline: ['avoid','go','go']
+      },
+      {
+        id: 'burari_straight', dir: 'BOTH', lat: 28.7235, lng: 77.2095, icon: '⬆️', limit: 60, rampGrade: 0.2,
+        titleFlat: '11 km Straightaway Cruise (Burari–Wazirabad)',
+        subFlat: '0.2% flat gradient • 60 km/h camera zone • Lock 5th gear at 55 km/h.',
+        voiceFlat: 'Eleven kilometer flat straightaway. Sixty speed camera ahead.',
+        lanesFlat: ['⚠️ LEFT: BUSES', '✅ MID: 55 KM/H', '✅ RIGHT: 55 KM/H'], stateFlat: ['avoid','go','go'],
+        titleIncline: '11 km Straightaway Cruise (Burari–Wazirabad)',
+        subIncline: '0.2% flat gradient • 60 km/h camera zone.',
+        voiceIncline: 'Sixty speed camera ahead.',
+        lanesIncline: ['⚠️ LEFT: BUSES', '✅ MID: 55 KM/H', '✅ RIGHT: 55 KM/H'], stateIncline: ['avoid','go','go']
+      },
+      {
+        id: 'isbt_am', dir: 'AM', lat: 28.6710, lng: 77.2312, icon: '↖️', limit: 50, rampGrade: 5.2,
+        titleFlat: 'Kashmere Gate — LOCK Flat Left Bypass',
+        subFlat: '5.2% curved flyover loop jams easily! Stay LEFT of pillar for 0% Salimgarh straight.',
+        voiceFlat: 'Kashmere Gate ahead. Stay left of pillar for flat Salimgarh Bypass.',
+        lanesFlat: ['⚠️ BUS BAYS', '✅ 0% FLAT BYPASS', '❌ 5.2% LOOP RAMP'], stateFlat: ['avoid','go','avoid'],
+        titleIncline: 'Kashmere Gate — Upper Loop Fallback (If Nigambodh Jammed)',
+        subIncline: 'Use right loop ONLY if surface is gridlocked and loop has zero queued traffic.',
+        voiceIncline: 'Kashmere Gate. Use upper loop only if completely clear of traffic.',
+        lanesIncline: ['⚠️ BUS BAYS', '⚠️ SURFACE JAM', '✅ CLEAR LOOP'], stateIncline: ['avoid','avoid','go']
+      },
+      {
+        id: 'salimgarh_straight', dir: 'BOTH', lat: 28.6254, lng: 77.2535, icon: '⬆️', limit: 60, rampGrade: 0.1,
+        titleFlat: '9 km Riverfront Straightaway (Salimgarh–Ring Rd)',
+        subFlat: '0.1% dead-flat corridor • 60 km/h camera at IP Estate • Zero stops.',
+        voiceFlat: 'Nine kilometer flat riverfront cruise. Sixty camera ahead.',
+        lanesFlat: ['✅ LEFT: CLEAR', '✅ MID: 58 KM/H', '⚠️ RIGHT: FAST'], stateFlat: ['go','go','avoid'],
+        titleIncline: '9 km Riverfront Straightaway (Salimgarh–Ring Rd)',
+        subIncline: '0.1% dead-flat corridor • 60 km/h camera at IP Estate.',
+        voiceIncline: 'Sixty speed camera zone.',
+        lanesIncline: ['✅ LEFT: CLEAR', '✅ MID: 58 KM/H', '⚠️ RIGHT: FAST'], stateIncline: ['go','go','avoid']
+      },
+      {
+        id: 'noida_entry_split', dir: 'AM', lat: 28.5815, lng: 77.3031, icon: '⬆️', limit: 50, rampGrade: 3.8,
+        titleFlat: 'Noida Entry — Prefer Flat Sec 12/22 Straight Grid',
+        subFlat: '0.1% flat tree-lined arterial + surface rotary above Rajnigandha underpass.',
+        voiceFlat: 'Entering Noida. Stay on flat surface grid toward Sector twelve twenty two.',
+        lanesFlat: ['✅ SURFACE ROTARY', '✅ FLAT SEC 12/22', '⚠️ ELEVATED RAMP'], stateFlat: ['go','go','avoid'],
+        titleIncline: 'Noida Entry — Elevated Road Fallback (Ramp Clear)',
+        subIncline: 'Sec 12/22 jammed & Elevated deck green? Take MP-1 Elevated Rd to Sec 61.',
+        voiceIncline: 'Entering Noida. Take Elevated Road fallback to Sector sixty one.',
+        lanesIncline: ['⚠️ SURFACE JAM', '✅ ELEVATED RAMP', '✅ ELEVATED RAMP'], stateIncline: ['avoid','go','go']
+      },
+      {
+        id: 'sec62_exit_pm', dir: 'PM', lat: 28.6062, lng: 77.3585, icon: '↰', limit: 50, rampGrade: 3.8,
+        titleFlat: 'Fortis Exit — Prefer Flat Sec 56 & 12/22 Straight',
+        subFlat: '0% flat road all the way to Mayur Vihar. Skips NH-9 & Elevated descent ramp jam.',
+        voiceFlat: 'Keep left past Fortis onto dead flat Sector fifty six straightaway.',
+        lanesFlat: ['✅ FLAT SEC 56', '✅ FLAT SEC 12/22', '❌ NH-9 FLYOVERS'], stateFlat: ['go','go','avoid'],
+        titleIncline: 'Sec 61 Elevated Ramp Fallback (Only If Ramp Is Green)',
+        subIncline: 'Take Elevated Rd ONLY if Sec 18 descent ramp has zero evening backlog.',
+        voiceIncline: 'Proceed to Sector sixty one Elevated Road ramp.',
+        lanesIncline: ['⚠️ SURFACE JAM', '✅ SEC 61 RAMP', '✅ SEC 61 RAMP'], stateIncline: ['avoid','go','go']
+      },
+      {
+        id: 'mukarba_pm', dir: 'PM', lat: 28.7365, lng: 77.1630, icon: '↖️', limit: 50, rampGrade: 4.6,
+        titleFlat: 'Mukarba & Haiderpur — LOCK Flat Surface Slip Roads',
+        subFlat: 'Evening traffic stacks on both flyover slopes! Stay LEFT on 0% surface road to Sec 15.',
+        voiceFlat: 'Mukarba Chowk ahead. Stay left on flat surface road under both flyovers.',
+        lanesFlat: ['✅ 0% FLAT SLIP', '❌ 4.6% RAMP JAM', '❌ 4.6% RAMP JAM'], stateFlat: ['go','avoid','avoid'],
+        titleIncline: 'Mukarba Flyover — Climb ONLY If Zero Brake Lights',
+        subIncline: 'If you see even 1 line of brake lights on the ramp, bail LEFT to the flat slip road!',
+        voiceIncline: 'Check Mukarba ramp visually. Climb only if completely empty, otherwise stay left.',
+        lanesIncline: ['✅ BAILOUT SLIP', '⚠️ CHECK RAMP', '⚠️ CHECK RAMP'], stateIncline: ['go','avoid','avoid']
+      }
+    ];
+
+    let dir = new Date().getHours() >= 13 ? 'PM' : 'AM';
+    let activeIdx = 0;
+    let terrainPolicy = 'FLAT_LOCKED'; // 'FLAT_LOCKED' | 'INCLINE_EMPTY' | 'AUTO_SMART'
+    let rainMode = false;
+    let followRider = true;
+    let simInterval = null;
+    let riderMarker = null;
+    let lastPos = [28.7295, 77.1292];
+    let currentSpeed = 0;
+    let routeLayers = L.layerGroup().addTo(map);
+    let nodeLayers = L.layerGroup().addTo(map);
+    let customDetourLayer = null;
+    let spokenSet = new Set();
+
+    function distM(lat1, lon1, lat2, lon2) {
+      const R = 6371e3, r = Math.PI / 180;
+      const dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
+      const a = Math.sin(dLat/2)**2 + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin(dLon/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function setTerrainPolicy(policy) {
+      terrainPolicy = policy;
+      spokenSet.clear();
+      document.getElementById('t-flat').className = 't-mode' + (policy === 'FLAT_LOCKED' ? ' active' : '');
+      document.getElementById('t-incline-free').className = 't-mode' + (policy === 'INCLINE_EMPTY' ? ' incline-active' : '');
+      document.getElementById('t-auto').className = 't-mode' + (policy === 'AUTO_SMART' ? ' active' : '');
+
+      const stateEl = document.getElementById('solver-state');
+      const actEl = document.getElementById('solver-action');
+
+      if (policy === 'FLAT_LOCKED') {
+        stateEl.innerText = '⚖️ POLICY: FLAT CLEAR OR BOTH BAD';
+        actEl.innerText = '● LEVEL TERRAIN LOCKED';
+        actEl.className = 'solver-verdict';
+        if (activeIdx === 2) selectCorridor(0, false);
+        fireAlert('warn', 'Level terrain locked. Flyovers bypassed.');
+      } else if (policy === 'INCLINE_EMPTY') {
+        stateEl.innerText = '⚖️ POLICY: FLAT JAMMED + RAMP EMPTY';
+        actEl.innerText = '⤴️ EMPTY INCLINE FALLBACK';
+        actEl.className = 'solver-verdict incline-ok';
+        fireAlert('warn', 'Empty incline fallback enabled. Climb only if ramp has zero traffic.');
+      } else {
+        stateEl.innerText = '⚖️ POLICY: SMART CRUISER PHYSICS';
+        actEl.innerText = '🤖 AUTO-LOCKING FLAT IF SLOW';
+        actEl.className = 'solver-verdict';
+        fireAlert('warn', 'Smart physics mode active.');
+      }
+      updateNavigationState(lastPos[0], lastPos[1], currentSpeed);
+    }
+
+    async function hydrateCorridorGeometry() {
+      const list = ROUTE_GRAPH[dir];
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].hydrated) continue;
+        const coordStr = list[i].pts.map(p => `${p[1]},${p[0]}`).join(';');
+        try {
+          const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`);
+          const data = await res.json();
+          if (data.routes && data.routes[0]) {
+            list[i].densePts = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+            list[i].hydrated = true;
+          }
+        } catch (e) {
+          list[i].densePts = list[i].pts;
+        }
+      }
+      renderAllCorridors();
+    }
+
+    function renderAllCorridors() {
+      routeLayers.clearLayers();
+      nodeLayers.clearLayers();
+      const list = ROUTE_GRAPH[dir];
+
+      list.forEach((corridor, idx) => {
+        document.getElementById(`tab-${idx}`).innerText = corridor.short;
+        document.getElementById(`tab-${idx}`).classList.toggle('active', idx === activeIdx);
+        if (idx === activeIdx) return;
+        const pts = corridor.densePts || corridor.pts;
+        L.polyline(pts, {
+          color: idx === 2 ? '#f59e0b' : '#64748b',
+          weight: 7, opacity: 0.75, dashArray: '8, 8'
+        }).on('click', () => selectCorridor(idx)).addTo(routeLayers);
+      });
+
+      const active = list[activeIdx];
+      const activePts = active.densePts || active.pts;
+      L.polyline(activePts, { color: '#022c43', weight: 13, opacity: 0.9 }).addTo(routeLayers);
+      L.polyline(activePts, { color: '#00f0ff', weight: 7, opacity: 1.0 }).addTo(routeLayers);
+
+      document.getElementById('active-corridor-pill').innerText = active.short;
+      document.getElementById('slope-badge').innerText = active.gradeProfile.split('•')[0];
+
+      NAV_NODES.forEach(n => {
+        if (n.dir === 'BOTH' || n.dir === dir) {
+          L.circleMarker([n.lat, n.lng], {
+            radius: 8, fillColor: n.rampGrade > 1.0 ? '#ff9e00' : '#00ff66',
+            color: '#000', weight: 2, fillOpacity: 1
+          }).bindPopup(`<b>${n.titleFlat}</b><br>${n.subFlat}`).addTo(nodeLayers);
+        }
+      });
+    }
+
+    function selectCorridor(idx, announce = true) {
+      activeIdx = idx;
+      if (customDetourLayer) { map.removeLayer(customDetourLayer); customDetourLayer = null; }
+      renderAllCorridors();
+      if (announce) {
+        fireAlert('warn', `Switched to ${ROUTE_GRAPH[dir][idx].short.replace(/[^a-zA-Z0-9 ]/g, '')}`);
+      }
+    }
+
+    // =========================================================================
+    // 4. DYNAMIC "FLATTEST & STRAIGHTEST" REROUTE SOLVER
+    // Evaluates candidate paths and penalizes turns + elevation climbs
+    // =========================================================================
+    async function triggerFlatStraightDetour() {
+      const dest = dir === 'AM' ? [28.6163, 77.3638] : [28.7295, 77.1292];
+      // Force safe flat Yamuna/Salimgarh/Mayur Vihar anchor so it never uses NH-9 or Khora
+      const flatAnchor = dir === 'AM' ? [28.6048, 77.2912] : [28.6568, 77.2455];
+      const dAnchor = distM(lastPos[0], lastPos[1], flatAnchor[0], flatAnchor[1]);
+      const wp = dAnchor > 2500
+        ? `${lastPos[1]},${lastPos[0]};${flatAnchor[1]},${flatAnchor[0]};${dest[1]},${dest[0]}`
+        : `${lastPos[1]},${lastPos[0]};${dest[1]},${dest[0]}`;
+
+      document.getElementById('solver-action').innerText = '🔄 SCORING STRAIGHTNESS & GRADE...';
+      try {
+        const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${wp}?alternatives=true&steps=true&overview=full&geometries=geojson`);
+        const data = await res.json();
+        if (data.routes && data.routes.length > 0) {
+          // Score each route: Penalize turn count (45s per turn) + incline steps (300s per flyover/ramp)
+          let bestRoute = data.routes[0], lowestCruiserCost = Infinity;
+          data.routes.forEach(r => {
+            let turns = 0, ramps = 0;
+            r.legs.forEach(leg => leg.steps.forEach(s => {
+              if (s.maneuver && (s.maneuver.type === 'turn' || s.maneuver.type === 'fork')) turns++;
+              const nm = (s.name || '').toLowerCase();
+              if (nm.includes('flyover') || nm.includes('expressway') || nm.includes('ramp')) ramps++;
+            }));
+            // If policy is FLAT_LOCKED (or both bad), apply heavy 300s penalty per ramp
+            const rampPenalty = (terrainPolicy === 'INCLINE_EMPTY') ? 30 : 300;
+            const cruiserCost = r.duration + (turns * 45) + (ramps * rampPenalty);
+            if (cruiserCost < lowestCruiserCost) {
+              lowestCruiserCost = cruiserCost;
+              bestRoute = r;
+            }
+          });
+
+          const coords = bestRoute.geometry.coordinates.map(c => [c[1], c[0]]);
+          if (customDetourLayer) map.removeLayer(customDetourLayer);
+          customDetourLayer = L.polyline(coords, { color: '#00ff66', weight: 8 }).addTo(map);
+          document.getElementById('solver-action').innerText = '● FLAT STRAIGHTAWAY DETOUR LOCKED';
+          fireAlert('warn', 'Flattest straightaway detour locked. Flyovers avoided.');
+        }
+      } catch (e) {
+        // Offline Fallback: Always prefer flat Corridor 0 or 1 (never Elevated Corridor 2 when offline)
+        const flatFallback = activeIdx === 0 ? 1 : 0;
+        selectCorridor(flatFallback, true);
+      }
+    }
+
+    function updateNavigationState(lat, lng, kmh) {
+      lastPos = [lat, lng];
+      currentSpeed = kmh;
+      if (!riderMarker) {
+        const icon = L.divIcon({ className: 'nav-puck', iconSize: [26, 26], iconAnchor: [13, 13] });
+        riderMarker = L.marker(lastPos, { icon, zIndexOffset: 1000 }).addTo(map);
+      } else {
+        riderMarker.setLatLng(lastPos);
+      }
+      if (followRider) map.panTo(lastPos, { animate: true, duration: 0.3 });
+      document.getElementById('speed-num').innerText = kmh;
+
+      // Check Distance to Corridors for Dynamic Auto-Adapt
+      const corridors = ROUTE_GRAPH[dir];
+      let bestCorridor = activeIdx, bestDist = Infinity, myDistOnActive = Infinity;
+      corridors.forEach((c, cIdx) => {
+        const pts = c.densePts || c.pts;
+        let minD = Infinity;
+        pts.forEach(p => {
+          const d = distM(lat, lng, p[0], p[1]);
+          if (d < minD) minD = d;
+        });
+        if (cIdx === activeIdx) myDistOnActive = minD;
+        if (minD < bestDist) { bestDist = minD; bestCorridor = cIdx; }
+      });
+
+      // Dynamic Corridor Adaptation: If rider switches roads, snap to it—UNLESS it's an incline corridor during slow/bad traffic!
+      if (bestCorridor !== activeIdx && myDistOnActive > 180 && bestDist < 95) {
+        if (bestCorridor === 2 && terrainPolicy === 'FLAT_LOCKED' && kmh < 25) {
+          // Both bad / slow traffic: Warn rider to stay on level ground!
+          fireAlert('danger', 'Heavy traffic detected. Stay on level surface road instead of elevated incline.');
+        } else {
+          selectCorridor(bestCorridor, true);
+        }
+      } else if (myDistOnActive > 480 && !customDetourLayer) {
+        triggerFlatStraightDetour();
+      }
+
+      // Remaining Distance & ETA
+      const dest = dir === 'AM' ? [28.6163, 77.3638] : [28.7295, 77.1292];
+      const remKm = Math.max(0.2, (distM(lat, lng, dest[0], dest[1]) * 1.25) / 1000);
+      const effSpeed = kmh > 18 ? kmh : 46;
+      const remMins = Math.max(1, Math.round((remKm / effSpeed) * 60));
+      document.getElementById('rem-mins').innerText = `${remMins} min`;
+      document.getElementById('rem-dist-eta').innerText = `${remKm.toFixed(1)} km • 94% Straightaways`;
+
+      // Evaluate Nearest Turn / Flyover Node Using 4-State Terrain Policy
+      let nearest = null, minNodeDist = Infinity;
+      NAV_NODES.forEach(n => {
+        if (n.dir !== 'BOTH' && n.dir !== dir) return;
+        const d = distM(lat, lng, n.lat, n.lng);
+        if (d < minNodeDist) { minNodeDist = d; nearest = n; }
+      });
+
+      const navTop = document.getElementById('nav-top');
+      const strobe = document.getElementById('strobe-frame');
+      const speedFloat = document.getElementById('speed-floating');
+
+      if (nearest) {
+        // Decide whether to show Flat Slip-Road instruction OR Empty-Incline Fallback instruction:
+        // Use Incline ONLY if user set INCLINE_EMPTY, OR in AUTO_SMART when approaching at free-flowing speed (>42 km/h)
+        const allowIncline = (terrainPolicy === 'INCLINE_EMPTY') || (terrainPolicy === 'AUTO_SMART' && kmh >= 42 && nearest.rampGrade < 4.8);
+
+        const title = allowIncline ? nearest.titleIncline : nearest.titleFlat;
+        const sub   = allowIncline ? nearest.subIncline   : nearest.subFlat;
+        const voice = allowIncline ? nearest.voiceIncline : nearest.voiceFlat;
+        const lanes = allowIncline ? nearest.lanesIncline : nearest.lanesFlat;
+        const state = allowIncline ? nearest.stateIncline : nearest.stateFlat;
+        const activeGrade = allowIncline ? `${nearest.rampGrade}% RAMP` : '0.1% FLAT';
+
+        document.getElementById('turn-icon').innerText = nearest.icon;
+        document.getElementById('turn-dist').innerText = minNodeDist < 1000 ? `${Math.round(minNodeDist)} m` : `${(minNodeDist/1000).toFixed(1)} km`;
+        document.getElementById('turn-title').innerText = title;
+        document.getElementById('turn-sub').innerText = sub;
+        document.getElementById('grade-lbl').innerText = activeGrade;
+        document.getElementById('slope-badge').innerText = allowIncline
+          ? `⤴️ ${nearest.rampGrade}% RAMP (ONLY IF EMPTY)`
+          : `⛰️ 0.1% FLAT • ZERO BRAKE HOLD`;
+
+        ['lane-l','lane-m','lane-r'].forEach((id, i) => {
+          const el = document.getElementById(id);
+          el.innerText = lanes[i];
+          el.className = `lane-pill ${state[i]}`;
+        });
+
+        const isOverspeed = kmh > nearest.limit && minNodeDist < 800;
+        speedFloat.classList.toggle('overspeed', isOverspeed);
+
+        if (isOverspeed) {
+          navTop.className = 'danger';
+          strobe.className = 'strobe-danger';
+        } else if (minNodeDist <= 480) {
+          navTop.className = allowIncline ? 'imminent' : 'incline-lock';
+          strobe.className = 'strobe-warn';
+          if (!spokenSet.has(nearest.id + '_' + allowIncline)) {
+            spokenSet.add(nearest.id + '_' + allowIncline);
+            fireAlert('warn', voice);
+          }
+        } else {
+          navTop.className = '';
+          strobe.className = '';
+        }
+      }
+    }
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(pos => {
+        if (simInterval) return;
+        const kmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+        updateNavigationState(pos.coords.latitude, pos.coords.longitude, kmh);
+      }, () => {}, { enableHighAccuracy: true, maximumAge: 1000 });
+    }
+
+    function toggleDirection() {
+      dir = dir === 'AM' ? 'PM' : 'AM';
+      activeIdx = 0;
+      spokenSet.clear();
+      document.getElementById('btn-dir').innerText = dir === 'AM' ? '☀️ AM ➔ Office' : '🌙 PM ➔ Home';
+      hydrateCorridorGeometry();
+    }
+
+    function toggleRain() {
+      rainMode = !rainMode;
+      const btn = document.getElementById('btn-rain');
+      btn.classList.toggle('rain', rainMode);
+      btn.innerText = rainMode ? '🌧️ Rain: ON' : '🌧️ Rain: OFF';
+      if (rainMode) {
+        fireAlert('danger', 'Rain mode enabled. Underpasses blocked.');
+      }
+    }
+
+    function toggleAudio() {
+      initAudio();
+      audioEnabled = !audioEnabled;
+      const btn = document.getElementById('btn-audio');
+      btn.classList.toggle('on', audioEnabled);
+      btn.innerText = audioEnabled ? '🔊 SafeChime' : '🔇 Muted';
+    }
+
+    function toggleFollow() {
+      followRider = !followRider;
+      if (followRider) map.setView(lastPos, 15);
+    }
+
+    function fitAllCorridors() {
+      followRider = false;
+      const pts = ROUTE_GRAPH[dir][activeIdx].pts;
+      map.fitBounds(L.latLngBounds(pts), { padding: [160, 35] });
+    }
+
+    function toggleSimulation() {
+      initAudio();
+      const btn = document.getElementById('btn-sim');
+      if (simInterval) {
+        clearInterval(simInterval);
+        simInterval = null;
+        btn.classList.remove('on');
+        btn.innerText = '▶️ Sim Ride';
+        document.getElementById('strobe-frame').className = '';
+        return;
+      }
+      spokenSet.clear();
+      btn.classList.add('on');
+      btn.innerText = '⏹️ Stop Sim';
+      followRider = true;
+      map.setZoom(14);
+
+      const pts = ROUTE_GRAPH[dir][activeIdx].densePts || ROUTE_GRAPH[dir][activeIdx].pts;
+      let i = 0;
+      simInterval = setInterval(() => {
+        if (i >= pts.length) { toggleSimulation(); return; }
+        updateNavigationState(pts[i][0], pts[i][1], 54);
+        i += Math.max(1, Math.floor(pts.length / 95));
+      }, 240);
+    }
+
+    if ('wakeLock' in navigator) {
+      document.addEventListener('click', () => navigator.wakeLock.request('screen').catch(()=>{}), { once: true });
+    }
+    if ('getBattery' in navigator) {
+      navigator.getBattery().then(b => {
+        const up = () => document.getElementById('batt-pill').innerText = `${b.charging ? '⚡' : '🔋'} ${Math.round(b.level*100)}%`;
+        up(); b.addEventListener('levelchange', up);
+      });
+    }
+
+    hydrateCorridorGeometry();
+  </script>
+</body>
+</html>
